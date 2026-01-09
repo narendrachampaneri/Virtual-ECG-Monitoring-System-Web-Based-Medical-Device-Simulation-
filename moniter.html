@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>ICU ECG Monitor</title>
+
+<style>
+body {
+  margin: 0;
+  background: #05070a;
+  color: #eaeaea;
+  font-family: "Segoe UI", Arial, sans-serif;
+}
+
+header {
+  padding: 15px 25px;
+  background: #0b0f14;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+#topStatus {
+  font-weight: bold;
+  font-size: 18px;
+  color: #2ecc71;
+}
+
+.container {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 20px;
+  padding: 20px;
+}
+
+.panel {
+  background: #10161d;
+  padding: 20px;
+  border-radius: 12px;
+}
+
+.stat { margin-bottom: 12px; font-size: 14px; }
+.stat strong { font-size: 20px; }
+
+canvas { background: black; border-radius: 10px; }
+
+button {
+  width: 100%;
+  margin-top: 8px;
+  padding: 10px;
+  background: #1f2935;
+  border: none;
+  color: white;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+button:hover { background: #273244; }
+
+.recording { background: #c0392b !important; }
+.playback { background: #2980b9 !important; }
+
+#recordStatus { color: #ff4d4d; display: none; font-size:13px; }
+#playbackStatus { color: #4da6ff; display: none; font-size:13px; }
+
+.bar { height: 10px; background: #333; border-radius: 5px; }
+.bar-fill { height: 10px; background: #2ecc71; }
+</style>
+</head>
+
+<body>
+
+<header>
+  <h2>🫀 ECG Monitor</h2>
+  <div id="topStatus">NORMAL</div>
+</header>
+
+<div class="container">
+
+<div class="panel">
+  <div class="stat">Heart Rate<br><strong id="bpm">-- BPM</strong></div>
+  <div class="stat">Mode<br><strong id="mode">NORMAL</strong></div>
+  <div class="stat">Noise<br><strong id="noise">OFF</strong></div>
+
+  <div class="stat">Signal Quality</div>
+  <div class="bar"><div id="sqi" class="bar-fill"></div></div>
+
+  <hr style="margin:15px 0;border-color:#222">
+
+  <button onclick="setMode('normal')">Normal Rhythm</button>
+  <button onclick="setMode('brady')">Bradycardia</button>
+  <button onclick="setMode('tachy')">Tachycardia</button>
+  <button onclick="toggleNoise()">Toggle Noise</button>
+
+  <hr style="margin:15px 0;border-color:#222">
+
+  <button id="recordBtn" onclick="toggleRecord()">● Start Recording</button>
+  <button id="playbackBtn" onclick="startPlayback()">▶ Playback</button>
+
+  <div>
+    <span id="recordStatus">● RECORDING…</span><br>
+    <span id="playbackStatus">▶ PLAYBACK MODE</span>
+  </div>
+</div>
+
+<canvas id="ecg" width="1100" height="350"></canvas>
+</div>
+
+<script>
+const canvas = document.getElementById("ecg");
+const ctx = canvas.getContext("2d");
+
+const bpm = document.getElementById("bpm");
+const mode = document.getElementById("mode");
+const noise = document.getElementById("noise");
+const sqi = document.getElementById("sqi");
+const topStatus = document.getElementById("topStatus");
+
+const recordBtn = document.getElementById("recordBtn");
+const playbackBtn = document.getElementById("playbackBtn");
+const recordStatus = document.getElementById("recordStatus");
+const playbackStatus = document.getElementById("playbackStatus");
+
+let liveData = new Array(1100).fill(0);
+let playbackData = [];
+let playbackIndex = 0;
+
+let isRecording = false;
+let isPlayback = false;
+
+/* GRID */
+function drawGrid() {
+  ctx.strokeStyle = "#0f2b1a";
+  for (let i = 0; i < canvas.width; i += 25) {
+    ctx.beginPath(); ctx.moveTo(i,0); ctx.lineTo(i,canvas.height); ctx.stroke();
+  }
+  for (let j = 0; j < canvas.height; j += 25) {
+    ctx.beginPath(); ctx.moveTo(0,j); ctx.lineTo(canvas.width,j); ctx.stroke();
+  }
+}
+
+/* DRAW */
+function drawECG(data) {
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  drawGrid();
+  ctx.beginPath();
+  ctx.strokeStyle = "red";
+  ctx.lineWidth = 2;
+
+  data.forEach((v,i)=>{
+    ctx.lineTo(i, canvas.height/2 - v*140);
+  });
+  ctx.stroke();
+}
+
+/* LIVE STREAM */
+function fetchECG() {
+  if (isPlayback) return;
+
+  fetch("/stream")
+    .then(r=>r.json())
+    .then(d=>{
+      if (d.lead_off) {
+        topStatus.innerText = "LEADS OFF";
+        topStatus.style.color = "#f39c12";
+        return;
+      }
+
+      liveData = liveData.slice(d.signal.length).concat(d.signal);
+      drawECG(liveData);
+
+      bpm.innerText = d.bpm + " BPM";
+      mode.innerText = d.mode.toUpperCase();
+      noise.innerText = d.noise ? "ON":"OFF";
+      sqi.style.width = d.sqi + "%";
+
+      topStatus.innerText = d.alert;
+
+      if (d.alert.includes("BRADY")) topStatus.style.color = "orange";
+      else if (d.alert.includes("TACHY")) topStatus.style.color = "red";
+      else topStatus.style.color = "#2ecc71";
+    });
+}
+
+/* CONTROLS */
+function setMode(m){ fetch("/set_mode?mode="+m); }
+function toggleNoise(){ fetch("/toggle_noise"); }
+
+/* RECORD */
+function toggleRecord() {
+  if (isPlayback) return;
+
+  fetch("/record")
+    .then(r=>r.json())
+    .then(d=>{
+      isRecording = d.recording;
+      recordBtn.classList.toggle("recording", isRecording);
+      recordBtn.innerText = isRecording ? "■ Stop Recording" : "● Start Recording";
+      recordStatus.style.display = isRecording ? "inline":"none";
+    });
+}
+
+/* PLAYBACK */
+function startPlayback() {
+  if (isRecording || isPlayback) return;
+
+  fetch("/playback")
+    .then(r=>r.json())
+    .then(p=>{
+      if (!p.length) return;
+
+      playbackData = p;
+      playbackIndex = 0;
+      isPlayback = true;
+
+      playbackBtn.classList.add("playback");
+      playbackStatus.style.display = "inline";
+
+      playLoop();
+    });
+}
+
+function playLoop() {
+  if (!isPlayback) return;
+
+  playbackIndex += 5;
+  if (playbackIndex >= playbackData.length) {
+    stopPlayback();
+    return;
+  }
+
+  let view = playbackData.slice(
+    Math.max(0, playbackIndex-1100),
+    playbackIndex
+  );
+
+  drawECG(new Array(1100-view.length).fill(0).concat(view));
+  requestAnimationFrame(playLoop);
+}
+
+function stopPlayback() {
+  isPlayback = false;
+  playbackBtn.classList.remove("playback");
+  playbackStatus.style.display = "none";
+}
+
+/* START */
+setInterval(fetchECG, 120);
+</script>
+
+</body>
+</html>
